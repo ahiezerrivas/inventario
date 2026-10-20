@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unicodedata
+from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
@@ -9,20 +10,25 @@ from openpyxl import load_workbook
 
 from inventory.models import InventoryItem
 
+# Sede/Oficina van antes que Global: Global repite casi todo su contenido, y con
+# --skip-duplicate-serials se conserva la fila de la hoja mas especifica.
 SHEET_MAP = {
-    "Inventario Global": "Global",
     "Inventario Sede": "Sede",
     "Inventario Oficina": "Oficina",
+    "Inventario Oficinas": "Oficina",
+    "Inventario Global": "Global",
 }
+
+PLACEHOLDER_SERIALS = {"S/S", "S/N", "SN", "N/A", "NA", "ILEGIBLE", "SIN SERIAL", "NO TIENE", "NO APLICA", "-", "0"}
 
 HEADER_ALIASES = {
     "asset_type": {"tipo de equipo", "tipo equipo"},
     "model": {"modelo"},
-    "serial": {"serial equipo", "serial"},
+    "serial": ("serial equipo", "serial"),
     "assignee": {"usuario"},
-    "office": {"oficina", "oficina unidad", "oficina / unidad", "unidad oficina", "unidad responsable"},
+    "office": ("oficina", "oficina unidad", "unidad oficina", "unidad", "unidad responsable"),
     "status": {"status", "estatus"},
-    "asset_code": {
+    "asset_code": (
         "cod.",
         "cod",
         "cod. de oficina",
@@ -33,7 +39,7 @@ HEADER_ALIASES = {
         "cod. adm",
         "codigo de unidad",
         "cod. unidad",
-    },
+    ),
 }
 
 SOURCE_BY_LOCATION = {
@@ -69,9 +75,10 @@ def first_header_row(rows: Iterable[tuple], max_scan: int = 40) -> int:
     return best_row
 
 
-def extract_value(row_values: dict[str, object], aliases: set[str]) -> str:
-    for key, value in row_values.items():
-        if key in aliases:
+def extract_value(row_values: dict[str, object], aliases: Iterable[str]) -> str:
+    for alias in aliases:
+        if alias in row_values:
+            value = row_values[alias]
             return "" if value is None else str(value)
     return ""
 
@@ -82,7 +89,13 @@ def infer_source_sheet(row_values: dict[str, object]) -> str:
 
 
 def normalize_serial(value: object) -> str:
-    return str(value or "").strip().upper()
+    serial = str(value or "").strip().upper()
+    return "" if serial in PLACEHOLDER_SERIALS else serial
+
+
+def no_serial_signature(item: InventoryItem) -> tuple[str, ...]:
+    fields = (item.asset_type, item.model, item.serial, item.office, item.asset_code)
+    return tuple(normalize(value) for value in fields)
 
 
 def build_existing_serials() -> set[str]:
@@ -137,6 +150,10 @@ class Command(BaseCommand):
 
         total = 0
         skipped_duplicates = 0
+        skipped_no_serial = 0
+        # Filas sin serial valido: una fila de Global se omite si ya aparecio
+        # una fila identica en una hoja anterior (conteo multiconjunto).
+        no_serial_seen: Counter = Counter()
         per_sheet: dict[str, int] = {"Global": 0, "Sede": 0, "Oficina": 0}
         buffer: list[InventoryItem] = []
 
@@ -153,7 +170,9 @@ class Command(BaseCommand):
             sources_to_import = [("Detalle", None)]
             self.stdout.write("Modo de importacion: hoja 'Detalle' (clasificacion por Ubicacion).")
         else:
-            sources_to_import = list(SHEET_MAP.items())
+            sources_to_import = [(name, source) for name, source in SHEET_MAP.items() if name in wb.sheetnames]
+            if not sources_to_import:
+                raise CommandError(f"El archivo no tiene ninguna de las hojas: {', '.join(SHEET_MAP)}")
             self.stdout.write("Modo de importacion: hojas Inventario Global/Sede/Oficina.")
 
         for sheet_name, fixed_source_sheet in sources_to_import:
@@ -178,14 +197,6 @@ class Command(BaseCommand):
                     source_sheet = fixed_source_sheet or infer_source_sheet(row_values)
 
                 serial_value = extract_value(row_values, HEADER_ALIASES["serial"])
-                if skip_duplicates:
-                    normalized = normalize_serial(serial_value)
-                    if normalized and normalized in existing_serials:
-                        skipped_duplicates += 1
-                        continue
-                    if normalized:
-                        existing_serials.add(normalized)
-
                 item = InventoryItem(
                     source_sheet=source_sheet,
                     asset_code=extract_value(row_values, HEADER_ALIASES["asset_code"]),
@@ -197,6 +208,24 @@ class Command(BaseCommand):
                     status=extract_value(row_values, HEADER_ALIASES["status"]).strip(),
                     extra={k: ("" if v is None else str(v)) for k, v in row_values.items()},
                 )
+
+                if skip_duplicates:
+                    normalized = normalize_serial(serial_value)
+                    if normalized:
+                        if normalized in existing_serials:
+                            skipped_duplicates += 1
+                            continue
+                        existing_serials.add(normalized)
+                    else:
+                        signature = no_serial_signature(item)
+                        if fixed_source_sheet == "Global":
+                            if no_serial_seen[signature] > 0:
+                                no_serial_seen[signature] -= 1
+                                skipped_no_serial += 1
+                                continue
+                        else:
+                            no_serial_seen[signature] += 1
+
                 buffer.append(item)
                 total += 1
                 per_sheet[source_sheet] += 1
@@ -215,3 +244,4 @@ class Command(BaseCommand):
         self.stdout.write(f"Oficina: {per_sheet['Oficina']}")
         if skip_duplicates:
             self.stdout.write(f"Omitidos por serial duplicado: {skipped_duplicates}")
+            self.stdout.write(f"Omitidos sin serial repetidos en Global: {skipped_no_serial}")
