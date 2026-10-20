@@ -20,7 +20,8 @@ HEADER_ALIASES = {
     "model": {"modelo"},
     "serial": {"serial equipo", "serial"},
     "assignee": {"usuario"},
-    "office": {"oficina", "oficina unidad", "oficina / unidad", "unidad responsable"},
+    "office": {"oficina", "oficina unidad", "oficina / unidad", "unidad oficina", "unidad responsable"},
+    "status": {"status", "estatus"},
     "asset_code": {
         "cod.",
         "cod",
@@ -193,6 +194,7 @@ class Command(BaseCommand):
                     serial=serial_value,
                     assignee=extract_value(row_values, HEADER_ALIASES["assignee"]),
                     office=extract_value(row_values, HEADER_ALIASES["office"]),
+                    status=extract_value(row_values, HEADER_ALIASES["status"]).strip(),
                     extra={k: ("" if v is None else str(v)) for k, v in row_values.items()},
                 )
                 buffer.append(item)
