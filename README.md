@@ -25,7 +25,7 @@ Importar Excel a PostgreSQL:
 
 
 
-`c:/Users/admin-c606401/Documents/inventario/.venv/Scripts/python.exe manage.py import_inventory_excel --file "c:/Users/admin-c606401/Documents/inventario/Copia de Inventario General Logistica y Soporte en Sitio ACTUALIZADA VF OCTUBRE 2026 1-9-2026 (version 1).xlsx"`
+c:/Users/admin-c606401/Documents/inventario/.venv/Scripts/python.exe manage.py import_inventory_excel --skip-duplicate-serials --file "c:/Users/admin-c606401/Documents/inventario/Copia de Inventario General Logistica y Soporte en Sitio ACTUALIZADA VF OCTUBRE 2026 1-9-2026 (version 1).xlsx"
 
 ## Frontend
 1. Ir a `frontend/`
